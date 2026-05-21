@@ -1,0 +1,29 @@
+{
+  "meta": {
+    "name": "tiny subject-verb agreement",
+    "schema": "etb-mini-syntaxgym"
+  },
+  "items": [
+    {
+      "item_number": 1,
+      "conditions": [
+        {"condition": "grammatical", "sentence": "The musician near the dancers knows the melody."},
+        {"condition": "ungrammatical", "sentence": "The musician near the dancers know the melody."}
+      ],
+      "predictions": [
+        {"better": "grammatical", "worse": "ungrammatical"}
+      ]
+    },
+    {
+      "item_number": 2,
+      "conditions": [
+        {"condition": "grammatical", "sentence": "The musicians near the dancer know the melody."},
+        {"condition": "ungrammatical", "sentence": "The musicians near the dancer knows the melody."}
+      ],
+      "predictions": [
+        {"better": "grammatical", "worse": "ungrammatical"}
+      ]
+    }
+  ]
+}
+

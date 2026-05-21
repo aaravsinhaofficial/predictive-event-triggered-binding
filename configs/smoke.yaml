@@ -1,0 +1,50 @@
+run_name: smoke
+seed: 13
+device: auto
+output_dir: outputs/smoke
+
+data:
+  train_text_path: data/fixtures/tiny_corpus.txt
+  eval_text_path: data/fixtures/tiny_eval.txt
+  tokenizer_dir: outputs/smoke/tokenizer
+  vocab_size: 256
+  block_size: 32
+
+model:
+  variant: etb
+  d_model: 64
+  hidden_size: 64
+  num_layers: 1
+  dropout: 0.0
+  memory_slots: 4
+  memory_roles: 4
+  vsa_dim: 128
+  gate_threshold: 0.5
+  gate_selection: topk
+  target_sparsity: 0.25
+  sparsity_lambda: 0.001
+  budget_lambda: 0.2
+  benefit_lambda: 0.2
+  candidate_loss_lambda: 0.05
+  benefit_temperature: 0.25
+  compute_penalty: 0.1
+  structural_prior_bonus: 0.2
+  interference_prior_bonus: 0.1
+  memory_dropout: 0.0
+
+training:
+  batch_size: 4
+  max_steps: 8
+  learning_rate: 0.001
+  weight_decay: 0.0
+  grad_clip: 1.0
+  log_every: 1
+  save_every: 8
+
+evaluation:
+  batch_size: 4
+  tasks:
+    blimp: data/fixtures/blimp/tiny.jsonl
+    syntaxgym: data/fixtures/syntaxgym/tiny_suite.json
+    fillergap: data/fixtures/fillergap/tiny.csv
+    naturalstories: data/fixtures/naturalstories/tiny.tsv

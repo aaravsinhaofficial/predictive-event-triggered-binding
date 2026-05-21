@@ -1,0 +1,49 @@
+run_name: babylm_100m
+seed: 29
+device: auto
+output_dir: outputs/babylm_100m
+
+data:
+  hf_dataset_name: BabyLM-community/BabyLM-2026-Strict
+  hf_split: train
+  text_column: text
+  prepared_text_path: data/babylm/strict_100m.txt
+  download_if_missing: false
+  max_tokens: 100000000
+  tokenizer_dir: outputs/babylm_100m/tokenizer
+  vocab_size: 32000
+  block_size: 512
+
+model:
+  variant: etb
+  d_model: 512
+  hidden_size: 512
+  num_layers: 2
+  dropout: 0.1
+  memory_slots: 16
+  memory_roles: 16
+  vsa_dim: 768
+  gate_threshold: 0.5
+  gate_selection: topk
+  target_sparsity: 0.12
+  sparsity_lambda: 0.001
+  budget_lambda: 0.2
+  benefit_lambda: 0.2
+  candidate_loss_lambda: 0.05
+  benefit_temperature: 0.25
+  compute_penalty: 0.1
+  structural_prior_bonus: 0.2
+  interference_prior_bonus: 0.1
+  memory_dropout: 0.05
+
+training:
+  batch_size: 32
+  max_steps: 90000
+  learning_rate: 0.0005
+  weight_decay: 0.01
+  grad_clip: 1.0
+  log_every: 100
+  save_every: 5000
+
+evaluation:
+  batch_size: 16

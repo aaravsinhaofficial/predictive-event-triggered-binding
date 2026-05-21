@@ -1,0 +1,4 @@
+{"sentence_good":"The musician near the dancers knows the melody.","sentence_bad":"The musician near the dancers know the melody.","field":"syntax","linguistics_term":"subject_verb_agreement","UID":"tiny_agreement","pairID":0}
+{"sentence_good":"The musicians near the dancer know the melody.","sentence_bad":"The musicians near the dancer knows the melody.","field":"syntax","linguistics_term":"subject_verb_agreement","UID":"tiny_agreement","pairID":1}
+{"sentence_good":"What did the pilot repair yesterday?","sentence_bad":"What did the pilot repair the engine yesterday?","field":"syntax","linguistics_term":"filler_gap","UID":"tiny_filler_gap","pairID":0}
+

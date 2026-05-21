@@ -1,0 +1,6 @@
+item_id,construction,condition,sentence,expected_good
+1,gap_distance_obj,licensed,What did the pilot repair yesterday?,1
+1,gap_distance_obj,filled_gap,What did the pilot repair the engine yesterday?,0
+2,wh_island,plain,Who did the teacher say solved the puzzle?,1
+2,wh_island,island,Who did the teacher wonder whether solved the puzzle?,0
+
