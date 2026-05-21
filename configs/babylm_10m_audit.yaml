@@ -1,0 +1,50 @@
+run_name: babylm_10m_audit
+seed: 23
+device: auto
+output_dir: outputs/babylm_10m_audit
+
+data:
+  prepared_text_path: data/babylm/strict_small_10000000.txt
+  max_train_tokens: 1000000
+  tokenizer_dir: outputs/babylm_10m_audit/tokenizer
+  vocab_size: 12000
+  block_size: 192
+
+model:
+  variant: etb
+  d_model: 192
+  hidden_size: 192
+  num_layers: 1
+  dropout: 0.1
+  memory_slots: 8
+  memory_roles: 8
+  vsa_dim: 256
+  gate_threshold: 0.5
+  gate_selection: topk
+  target_sparsity: 0.15
+  sparsity_lambda: 0.001
+  budget_lambda: 0.2
+  benefit_lambda: 0.2
+  candidate_loss_lambda: 0.05
+  benefit_temperature: 0.25
+  compute_penalty: 0.1
+  structural_prior_bonus: 0.2
+  interference_prior_bonus: 0.1
+  memory_dropout: 0.05
+
+training:
+  batch_size: 32
+  max_steps: 300
+  learning_rate: 0.0008
+  weight_decay: 0.01
+  grad_clip: 1.0
+  log_every: 25
+  save_every: 300
+
+evaluation:
+  batch_size: 16
+  tasks:
+    blimp: data/eval_audit/blimp/data
+    syntaxgym: data/eval_audit/syntaxgym
+    fillergap: data/eval_audit/fillergap/fillergap.csv
+    naturalstories: data/eval_audit/naturalstories/naturalstories.tsv

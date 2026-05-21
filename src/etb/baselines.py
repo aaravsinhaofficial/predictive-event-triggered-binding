@@ -75,6 +75,11 @@ def _flatten_summary(
     for task in ("blimp", "syntaxgym", "fillergap"):
         if task in eval_metrics:
             row[f"{task}_accuracy"] = eval_metrics[task].get("accuracy")
+            row[f"{task}_n"] = eval_metrics[task].get("n")
     if "naturalstories" in eval_metrics:
         row["naturalstories_delta_r2_gate"] = eval_metrics["naturalstories"].get("delta_r2_gate")
+        row["naturalstories_n"] = eval_metrics["naturalstories"].get("n")
+        row["naturalstories_baseline_controls"] = ",".join(
+            eval_metrics["naturalstories"].get("baseline_controls", [])
+        )
     return row

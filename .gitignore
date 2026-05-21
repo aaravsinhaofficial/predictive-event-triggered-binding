@@ -5,6 +5,8 @@ __pycache__/
 
 outputs/
 data/babylm/
+data/eval/
+data/eval_audit/
+data/sources/
 
 .DS_Store
-

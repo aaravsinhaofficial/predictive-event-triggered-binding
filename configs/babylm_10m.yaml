@@ -7,7 +7,7 @@ data:
   hf_dataset_name: BabyLM-community/BabyLM-2026-Strict-Small
   hf_split: train
   text_column: text
-  prepared_text_path: data/babylm/strict_small_10m.txt
+  prepared_text_path: data/babylm/strict_small_10000000.txt
   download_if_missing: false
   max_tokens: 10000000
   tokenizer_dir: outputs/babylm_10m/tokenizer
@@ -47,3 +47,8 @@ training:
 
 evaluation:
   batch_size: 16
+  tasks:
+    blimp: data/eval/blimp/data
+    syntaxgym: data/eval/syntaxgym
+    fillergap: data/eval/fillergap/fillergap.csv
+    naturalstories: data/eval/naturalstories/naturalstories.tsv
