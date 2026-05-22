@@ -170,6 +170,8 @@ def test_contrastive_and_reading_time_aux_loaders(tmp_path):
     )
     assert examples
     assert examples[0]["input_ids"].numel() == examples[0]["gate_targets"].numel()
+    assert examples[0]["input_ids"].numel() == examples[0]["word_ids"].numel()
+    assert examples[0]["gate_mask"].sum().item() > 0
 
 
 def test_cheap_surprisal_feature_is_causal():

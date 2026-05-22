@@ -179,10 +179,10 @@ def _collate_contrastive_pairs(batch: list[tuple[str, str]]) -> dict[str, list[s
 def _build_reading_time_loader(
     config: ExperimentConfig,
     tokenizer: Any,
-) -> tuple[DataLoader | None, float, int]:
+) -> tuple[DataLoader | None, float, int, float, bool]:
     rt_cfg = dict(config.training.get("rt_gate", {}) or {})
     if not rt_cfg.get("enabled", False) or not rt_cfg.get("path"):
-        return None, 0.0, 1
+        return None, 0.0, 1, 1.0, False
 
     examples = _load_reading_time_examples(
         Path(rt_cfg["path"]),
@@ -190,7 +190,7 @@ def _build_reading_time_loader(
         target_temperature=float(rt_cfg.get("target_temperature", 1.0)),
     )
     if not examples:
-        return None, 0.0, 1
+        return None, 0.0, 1, 1.0, False
 
     console.print(f"[cyan]Loaded {len(examples)} reading-time gate examples[/cyan]")
     loader = DataLoader(
@@ -204,6 +204,8 @@ def _build_reading_time_loader(
         loader,
         float(rt_cfg.get("weight", 0.0)),
         max(1, int(rt_cfg.get("every", 1))),
+        float(rt_cfg.get("target_temperature", 1.0)),
+        bool(rt_cfg.get("residualize_surprisal", False)),
     )
 
 
@@ -232,7 +234,11 @@ def _load_reading_time_examples(
         sentence_piece_ids: list[int] = [int(tokenizer.bos_token_id)]
         gate_targets: list[float] = [0.0]
         gate_mask: list[float] = [0.0]
-        for record in records:
+        rt_values: list[float] = [0.0]
+        token_lengths: list[float] = [0.0]
+        log_frequencies: list[float] = [0.0]
+        word_ids: list[int] = [0]
+        for word_id, record in enumerate(records, start=1):
             pieces = tokenizer.encode(str(record["token"]), add_special_tokens=False)
             if not pieces:
                 pieces = [int(tokenizer.unk_token_id)]
@@ -241,14 +247,26 @@ def _load_reading_time_examples(
                 is_last_piece = piece_index == len(pieces) - 1
                 gate_targets.append(float(record["_rt_target"]) if is_last_piece else 0.0)
                 gate_mask.append(1.0 if is_last_piece else 0.0)
+                rt_values.append(float(record["rt"]) if is_last_piece else 0.0)
+                token_lengths.append(float(len(str(record["token"]))) if is_last_piece else 0.0)
+                log_frequencies.append(float(record.get("log_frequency", 0.0)) if is_last_piece else 0.0)
+                word_ids.append(word_id)
         sentence_piece_ids.append(int(tokenizer.eos_token_id))
         gate_targets.append(0.0)
         gate_mask.append(0.0)
+        rt_values.append(0.0)
+        token_lengths.append(0.0)
+        log_frequencies.append(0.0)
+        word_ids.append(0)
         examples.append(
             {
                 "input_ids": torch.tensor(sentence_piece_ids, dtype=torch.long),
                 "gate_targets": torch.tensor(gate_targets, dtype=torch.float),
                 "gate_mask": torch.tensor(gate_mask, dtype=torch.float),
+                "rt": torch.tensor(rt_values, dtype=torch.float),
+                "token_length": torch.tensor(token_lengths, dtype=torch.float),
+                "log_frequency": torch.tensor(log_frequencies, dtype=torch.float),
+                "word_ids": torch.tensor(word_ids, dtype=torch.long),
             }
         )
     return examples
@@ -263,17 +281,29 @@ def _collate_reading_time(
     attention_mask = torch.zeros((len(batch), max_len), dtype=torch.long)
     gate_targets = torch.zeros((len(batch), max_len), dtype=torch.float)
     gate_mask = torch.zeros((len(batch), max_len), dtype=torch.float)
+    rt = torch.zeros((len(batch), max_len), dtype=torch.float)
+    token_length = torch.zeros((len(batch), max_len), dtype=torch.float)
+    log_frequency = torch.zeros((len(batch), max_len), dtype=torch.float)
+    word_ids = torch.zeros((len(batch), max_len), dtype=torch.long)
     for row, item in enumerate(batch):
         length = int(item["input_ids"].numel())
         input_ids[row, :length] = item["input_ids"]
         attention_mask[row, :length] = 1
         gate_targets[row, :length] = item["gate_targets"]
         gate_mask[row, :length] = item["gate_mask"]
+        rt[row, :length] = item["rt"]
+        token_length[row, :length] = item["token_length"]
+        log_frequency[row, :length] = item["log_frequency"]
+        word_ids[row, :length] = item["word_ids"]
     return {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
         "gate_targets": gate_targets,
         "gate_mask": gate_mask,
+        "rt": rt,
+        "token_length": token_length,
+        "log_frequency": log_frequency,
+        "word_ids": word_ids,
     }
 
 
@@ -339,15 +369,90 @@ def _contrastive_sentence_loss(
 def _reading_time_gate_loss(
     model: ETBForCausalLM,
     batch: dict[str, torch.Tensor],
+    target_temperature: float,
+    residualize_surprisal: bool,
 ) -> torch.Tensor:
     output = model(
         input_ids=batch["input_ids"],
         attention_mask=batch["attention_mask"],
     )
     assert output.gate_probs is not None
-    raw = F.mse_loss(output.gate_probs, batch["gate_targets"], reduction="none")
+    if residualize_surprisal:
+        assert output.logits is not None
+        gate_targets = _current_residual_gate_targets(
+            logits=output.logits,
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            gate_mask=batch["gate_mask"],
+            word_ids=batch["word_ids"],
+            rt=batch["rt"],
+            token_length=batch["token_length"],
+            log_frequency=batch["log_frequency"],
+            target_temperature=target_temperature,
+        )
+    else:
+        gate_targets = batch["gate_targets"]
+    raw = F.mse_loss(output.gate_probs, gate_targets, reduction="none")
     mask = batch["gate_mask"]
     return (raw * mask).sum() / mask.sum().clamp_min(1.0)
+
+
+def _current_residual_gate_targets(
+    logits: torch.Tensor,
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    gate_mask: torch.Tensor,
+    word_ids: torch.Tensor,
+    rt: torch.Tensor,
+    token_length: torch.Tensor,
+    log_frequency: torch.Tensor,
+    target_temperature: float,
+) -> torch.Tensor:
+    with torch.no_grad():
+        piece_surprisal = torch.zeros_like(gate_mask)
+        log_probs = logits[:, :-1, :].log_softmax(dim=-1)
+        targets = input_ids[:, 1:]
+        target_mask = attention_mask[:, 1:].bool()
+        safe_targets = targets.masked_fill(~target_mask, 0)
+        next_surprisal = -log_probs.gather(-1, safe_targets.unsqueeze(-1)).squeeze(-1)
+        piece_surprisal[:, 1:] = next_surprisal.masked_fill(~target_mask, 0.0)
+
+        word_surprisal = torch.zeros_like(gate_mask)
+        for row in range(input_ids.size(0)):
+            max_word_id = int(word_ids[row].max().item())
+            for word_id in range(1, max_word_id + 1):
+                positions = word_ids[row].eq(word_id)
+                if not bool(positions.any()):
+                    continue
+                end_position = positions.nonzero(as_tuple=False)[-1, 0]
+                word_surprisal[row, end_position] = piece_surprisal[row, positions].sum()
+
+        mask = gate_mask.bool()
+        if int(mask.sum().item()) < 5:
+            return torch.zeros_like(gate_mask)
+
+        y = rt[mask].float()
+        controls = torch.stack(
+            [
+                word_surprisal[mask].float(),
+                token_length[mask].float(),
+                log_frequency[mask].float(),
+            ],
+            dim=1,
+        )
+        controls = (controls - controls.mean(dim=0, keepdim=True)) / controls.std(
+            dim=0,
+            keepdim=True,
+        ).clamp_min(1e-6)
+        design = torch.cat([torch.ones_like(y[:, None]), controls], dim=1)
+        beta = torch.linalg.pinv(design) @ y
+        residual = y - design @ beta
+        residual = (residual - residual.mean()) / residual.std().clamp_min(1e-6)
+        temp = max(1e-4, float(target_temperature))
+        target_values = torch.sigmoid(residual / temp)
+        targets_out = torch.zeros_like(gate_mask)
+        targets_out[mask] = target_values
+        return targets_out
 
 
 def train(config: ExperimentConfig) -> Path:
@@ -386,7 +491,9 @@ def train(config: ExperimentConfig) -> Path:
         _build_contrastive_loader(config, tokenizer)
     )
     contrastive_batches = itertools.cycle(contrastive_loader) if contrastive_loader else None
-    rt_loader, rt_weight, rt_every = _build_reading_time_loader(config, tokenizer)
+    rt_loader, rt_weight, rt_every, rt_target_temperature, rt_residualize_surprisal = (
+        _build_reading_time_loader(config, tokenizer)
+    )
     rt_batches = itertools.cycle(rt_loader) if rt_loader else None
 
     optimizer = AdamW(
@@ -436,7 +543,12 @@ def train(config: ExperimentConfig) -> Path:
             rt_batch = {
                 key: value.to(device) for key, value in next(rt_batches).items()
             }
-            rt_gate_loss = _reading_time_gate_loss(model, rt_batch)
+            rt_gate_loss = _reading_time_gate_loss(
+                model,
+                rt_batch,
+                target_temperature=rt_target_temperature,
+                residualize_surprisal=rt_residualize_surprisal,
+            )
             loss = loss + rt_weight * rt_gate_loss
 
         loss.backward()
