@@ -24,6 +24,7 @@ from etb.models.memory import RoleFillerMemory
 @dataclass
 class ETBOutput(ModelOutput):
     loss: torch.Tensor | None = None
+    lm_loss: torch.Tensor | None = None
     logits: torch.Tensor | None = None
     gate_probs: torch.Tensor | None = None
     gate_activations: torch.Tensor | None = None
@@ -61,6 +62,9 @@ class ETBForCausalLM(PreTrainedModel):
         self.gate = EventGate(config)
         self.memory = RoleFillerMemory(config)
         self.memory_lm_head = nn.Linear(gru_hidden, config.vocab_size, bias=False)
+        self.memory_residual_scale = nn.Parameter(
+            torch.tensor(float(config.memory_residual_scale_init))
+        )
 
         if config.variant == "dense_gru":
             self.dense_residual = nn.Sequential(
@@ -130,6 +134,13 @@ class ETBForCausalLM(PreTrainedModel):
             gate_stats = torch.zeros_like(cheap_stats)
             gate_boundaries = torch.zeros_like(boundaries)
         gate_logits = self.gate(hidden, gate_stats, gate_boundaries)
+        selection_mask = self._gate_selection_mask(attention_mask)
+        if self.config.variant == "etb":
+            gate_logits = gate_logits + self._gate_feature_prior(
+                cheap_stats,
+                boundaries,
+                selection_mask,
+            )
         gate_probs, gate_hard = route_gate(
             variant=self.config.variant,
             learned_logits=gate_logits,
@@ -139,9 +150,8 @@ class ETBForCausalLM(PreTrainedModel):
             target_sparsity=float(self.config.target_sparsity),
             selection=str(self.config.gate_selection),
             training=self.training,
+            selection_mask=selection_mask,
         )
-        gate_probs = gate_probs * attention_mask.float()
-        gate_hard = gate_hard * attention_mask.float()
 
         if self.config.variant in {"cheap_only"}:
             logits = cheap_logits
@@ -164,16 +174,19 @@ class ETBForCausalLM(PreTrainedModel):
             labels=labels,
             gate_logits=gate_logits,
             gate_probs=gate_probs,
+            gate_hard=gate_hard,
             attention_mask=attention_mask,
+            selection_mask=selection_mask,
             boundaries=boundaries,
             cheap_stats=cheap_stats,
         )
         aux_loss = aux["aux_loss"]
 
         loss = None
+        lm_loss = None
         if labels is not None:
-            loss = self._causal_lm_loss(logits, labels)
-            loss = loss + aux_loss
+            lm_loss = self._causal_lm_loss(logits, labels)
+            loss = lm_loss + aux_loss
 
         if not return_dict:
             output: tuple[torch.Tensor, ...] = (logits, gate_probs, gate_hard)
@@ -183,6 +196,7 @@ class ETBForCausalLM(PreTrainedModel):
 
         return ETBOutput(
             loss=loss,
+            lm_loss=lm_loss,
             logits=logits,
             gate_probs=gate_probs,
             gate_activations=gate_hard,
@@ -206,15 +220,18 @@ class ETBForCausalLM(PreTrainedModel):
         labels: torch.Tensor | None,
         gate_logits: torch.Tensor,
         gate_probs: torch.Tensor,
+        gate_hard: torch.Tensor,
         attention_mask: torch.Tensor,
+        selection_mask: torch.Tensor,
         boundaries: torch.Tensor,
         cheap_stats: torch.Tensor,
     ) -> dict[str, torch.Tensor | None]:
         zero = torch.zeros((), device=cheap_logits.device, dtype=cheap_logits.dtype)
-        gate_mean = self._masked_mean(gate_probs, attention_mask.float())
+        gate_mean = self._masked_mean(gate_probs, selection_mask.float())
+        hard_gate_mean = self._masked_mean(gate_hard.detach(), selection_mask.float())
         compute_loss = float(self.config.sparsity_lambda) * gate_mean
         budget_loss = float(self.config.budget_lambda) * (
-            gate_mean - float(self.config.target_sparsity)
+            hard_gate_mean - float(self.config.target_sparsity)
         ).pow(2)
 
         candidate_logits = None
@@ -222,6 +239,7 @@ class ETBForCausalLM(PreTrainedModel):
         gate_targets = torch.zeros_like(gate_probs)
         benefit_loss = zero
         candidate_loss = zero
+        prior_distill_loss = zero
 
         if self.config.variant == "etb" and labels is not None:
             candidate_logits, _ = self._memory_augmented_logits(
@@ -235,25 +253,61 @@ class ETBForCausalLM(PreTrainedModel):
             structural_prior = boundaries[:, :-1, :].amax(dim=-1) * float(
                 self.config.structural_prior_bonus
             )
-            interference_prior = cheap_stats[:, :-1, 2] * float(self.config.interference_prior_bonus)
-            target = torch.sigmoid(
-                (
-                    delta.detach()
-                    + structural_prior
-                    + interference_prior
-                    - float(self.config.compute_penalty)
+            interference_prior = cheap_stats[:, :-1, 2] * float(
+                self.config.interference_prior_bonus
+            )
+            benefit_score = (
+                delta.detach()
+                + structural_prior
+                + interference_prior
+                - float(self.config.compute_penalty)
+            )
+            if str(self.config.gate_target_mode) == "topk":
+                target = self._topk_targets(
+                    benefit_score,
+                    valid_next,
+                    target_sparsity=float(self.config.target_sparsity),
                 )
-                / max(1e-4, float(self.config.benefit_temperature))
+            else:
+                target = torch.sigmoid(
+                    benefit_score / max(1e-4, float(self.config.benefit_temperature))
+                )
+            pos_weight = torch.tensor(
+                float(self.config.gate_positive_weight)
+                if self.config.gate_positive_weight is not None
+                else max(
+                    1.0,
+                    (1.0 - float(self.config.target_sparsity))
+                    / max(1e-4, float(self.config.target_sparsity)),
+                ),
+                device=cheap_logits.device,
+                dtype=cheap_logits.dtype,
             )
             benefit_raw = F.binary_cross_entropy_with_logits(
                 gate_logits[:, :-1],
                 target,
+                pos_weight=pos_weight if str(self.config.gate_target_mode) == "topk" else None,
                 reduction="none",
             )
             benefit_loss = float(self.config.benefit_lambda) * self._masked_mean(
                 benefit_raw,
                 valid_next.float(),
             )
+            if float(self.config.prior_distill_lambda) > 0:
+                prior_target = self._prior_distill_target(
+                    cheap_stats[:, :-1, :],
+                    boundaries[:, :-1, :],
+                    valid_next,
+                )
+                prior_raw = F.binary_cross_entropy_with_logits(
+                    gate_logits[:, :-1],
+                    prior_target,
+                    reduction="none",
+                )
+                prior_distill_loss = float(self.config.prior_distill_lambda) * self._masked_mean(
+                    prior_raw,
+                    valid_next.float(),
+                )
             candidate_loss = float(self.config.candidate_loss_lambda) * self._causal_lm_loss(
                 candidate_logits,
                 labels,
@@ -262,7 +316,13 @@ class ETBForCausalLM(PreTrainedModel):
             gate_targets[:, :-1] = target.masked_fill(~valid_next, 0.0)
 
         return {
-            "aux_loss": compute_loss + budget_loss + benefit_loss + candidate_loss,
+            "aux_loss": (
+                compute_loss
+                + budget_loss
+                + benefit_loss
+                + candidate_loss
+                + prior_distill_loss
+            ),
             "candidate_logits": candidate_logits,
             "information_gain": information_gain,
             "gate_targets": gate_targets,
@@ -299,6 +359,74 @@ class ETBForCausalLM(PreTrainedModel):
     def _masked_mean(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         return (values * mask).sum() / mask.sum().clamp_min(1.0)
 
+    def _gate_selection_mask(self, attention_mask: torch.Tensor) -> torch.Tensor:
+        mask = torch.zeros_like(attention_mask, dtype=torch.float)
+        mask[:, :-1] = attention_mask[:, 1:].float()
+        return mask
+
+    def _standardize(self, values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        mask = mask.float()
+        denom = mask.sum(dim=1, keepdim=True).clamp_min(1.0)
+        mean = (values * mask).sum(dim=1, keepdim=True) / denom
+        centered = (values - mean) * mask
+        var = (centered.pow(2) * mask).sum(dim=1, keepdim=True) / denom
+        return centered / var.sqrt().clamp_min(1e-4)
+
+    def _gate_feature_prior(
+        self,
+        cheap_stats: torch.Tensor,
+        boundaries: torch.Tensor,
+        selection_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        entropy = self._standardize(cheap_stats[..., 0], selection_mask)
+        surprisal = self._standardize(cheap_stats[..., 1], selection_mask)
+        interference = self._standardize(cheap_stats[..., 2], selection_mask)
+        boundary = boundaries[..., :2].amax(dim=-1)
+        prior = (
+            float(self.config.entropy_prior_weight) * entropy
+            + float(self.config.surprisal_prior_weight) * surprisal
+            + float(self.config.interference_prior_weight) * interference
+            + float(self.config.boundary_prior_weight) * boundary
+        )
+        return float(self.config.gate_feature_prior_scale) * prior
+
+    def _prior_distill_target(
+        self,
+        cheap_stats: torch.Tensor,
+        boundaries: torch.Tensor,
+        valid: torch.Tensor,
+    ) -> torch.Tensor:
+        entropy = self._standardize(cheap_stats[..., 0], valid.float())
+        surprisal = self._standardize(cheap_stats[..., 1], valid.float())
+        interference = self._standardize(cheap_stats[..., 2], valid.float())
+        boundary = boundaries[..., :2].amax(dim=-1)
+        score = (
+            float(self.config.entropy_prior_weight) * entropy
+            + float(self.config.surprisal_prior_weight) * surprisal
+            + float(self.config.interference_prior_weight) * interference
+            + float(self.config.boundary_prior_weight) * boundary
+        )
+        temp = max(1e-4, float(self.config.prior_distill_temperature))
+        return torch.sigmoid(score / temp).masked_fill(~valid, 0.0)
+
+    def _topk_targets(
+        self,
+        scores: torch.Tensor,
+        valid: torch.Tensor,
+        target_sparsity: float,
+    ) -> torch.Tensor:
+        targets = torch.zeros_like(scores)
+        masked = scores.masked_fill(~valid, float("-inf"))
+        valid_counts = valid.sum(dim=1)
+        for row, count in enumerate(valid_counts.tolist()):
+            if count <= 0:
+                continue
+            k = max(1, int(round(int(count) * min(1.0, target_sparsity))))
+            k = min(k, int(count))
+            indices = masked[row].topk(k).indices
+            targets[row, indices] = 1.0
+        return targets
+
     def _memory_augmented_logits(
         self,
         hidden: torch.Tensor,
@@ -321,7 +449,11 @@ class ETBForCausalLM(PreTrainedModel):
                 memory=memory_state,
                 gate_t=gate_hard[:, t],
             )
-            residual = self.memory_lm_head(read_hidden) * gate_hard[:, t, None]
+            residual = (
+                self.memory_lm_head(read_hidden)
+                * self.memory_residual_scale
+                * gate_hard[:, t, None]
+            )
             residuals.append(residual)
             for key, value in events_t.items():
                 event_rows[key].append(value)

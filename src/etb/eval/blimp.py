@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 
-from etb.eval.scoring import sentence_log_likelihood
+from etb.eval.scoring import sentence_log_likelihood_batch
 from etb.utils import read_jsonl, write_jsonl
 
 
@@ -19,14 +19,30 @@ def _load_blimp_rows(path: str | Path) -> list[dict]:
     return read_jsonl(source)
 
 
-def evaluate_blimp(model: Any, tokenizer: Any, device: Any, path: str | Path, out_dir: str | Path) -> dict:
+def evaluate_blimp(
+    model: Any,
+    tokenizer: Any,
+    device: Any,
+    path: str | Path,
+    out_dir: str | Path,
+) -> dict:
     rows = _load_blimp_rows(path)
     outputs: list[dict] = []
     correct = 0
     by_uid: dict[str, list[int]] = {}
-    for row in rows:
-        good = sentence_log_likelihood(model, tokenizer, row["sentence_good"], device)
-        bad = sentence_log_likelihood(model, tokenizer, row["sentence_bad"], device)
+    good_scores = sentence_log_likelihood_batch(
+        model,
+        tokenizer,
+        [str(row["sentence_good"]) for row in rows],
+        device,
+    )
+    bad_scores = sentence_log_likelihood_batch(
+        model,
+        tokenizer,
+        [str(row["sentence_bad"]) for row in rows],
+        device,
+    )
+    for row, good, bad in zip(rows, good_scores, bad_scores, strict=True):
         is_correct = int(good["log_likelihood"] > bad["log_likelihood"])
         correct += is_correct
         uid = str(row.get("UID", "unknown"))

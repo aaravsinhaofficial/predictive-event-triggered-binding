@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 
-from etb.eval.scoring import sentence_log_likelihood
+from etb.eval.scoring import sentence_log_likelihood_batch
 
 
 def evaluate_fillergap(
@@ -17,8 +17,14 @@ def evaluate_fillergap(
 ) -> dict:
     data = pd.read_csv(path)
     scored = []
-    for row in data.to_dict("records"):
-        score = sentence_log_likelihood(model, tokenizer, str(row["sentence"]), device)
+    records = data.to_dict("records")
+    scores = sentence_log_likelihood_batch(
+        model,
+        tokenizer,
+        [str(row["sentence"]) for row in records],
+        device,
+    )
+    for row, score in zip(records, scores, strict=True):
         scored.append({**row, "log_likelihood": score["log_likelihood"]})
     scored_df = pd.DataFrame(scored)
 
@@ -50,4 +56,3 @@ def evaluate_fillergap(
         "scored": str(out_scored),
         "decisions": str(out_decisions),
     }
-

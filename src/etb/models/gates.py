@@ -105,6 +105,7 @@ def route_gate(
     target_sparsity: float,
     selection: str,
     training: bool,
+    selection_mask: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Convert gate logits/features into probabilities and hard activations."""
 
@@ -119,18 +120,39 @@ def route_gate(
         probs = hard
     elif variant == "random_matched":
         probs = torch.full_like(learned_logits, float(target_sparsity))
-        hard = torch.bernoulli(probs) if training else probs
+        if training:
+            hard = torch.bernoulli(probs)
+        else:
+            hard = _select_gate(
+                _deterministic_random_scores(learned_logits),
+                target_sparsity,
+                threshold,
+                selection,
+                training,
+                selection_mask=selection_mask,
+            )
     elif variant == "generic_dynamic":
         entropy = cheap_stats[..., 0]
         centered = entropy - entropy.mean(dim=1, keepdim=True)
         scaled = centered / entropy.std(dim=1, keepdim=True).clamp_min(1e-4)
         probs = torch.sigmoid(scaled)
-        hard = _select_gate(probs, target_sparsity, threshold, selection, training)
+        hard = _select_gate(probs, target_sparsity, threshold, selection, training, selection_mask)
     else:
         probs = torch.sigmoid(learned_logits)
-        hard_binary = _select_gate(probs, target_sparsity, threshold, selection, training)
+        hard_binary = _select_gate(
+            probs,
+            target_sparsity,
+            threshold,
+            selection,
+            training,
+            selection_mask=selection_mask,
+        )
         hard = hard_binary + probs - probs.detach() if training else hard_binary
 
+    if selection_mask is not None:
+        mask = selection_mask.float()
+        probs = probs * mask
+        hard = hard * mask
     return probs, hard
 
 
@@ -140,13 +162,35 @@ def _select_gate(
     threshold: float,
     selection: str,
     training: bool,
+    selection_mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
+    if selection_mask is not None:
+        valid = selection_mask.bool()
+    else:
+        valid = torch.ones_like(probs, dtype=torch.bool)
+
     if selection == "sample" and training:
-        return torch.bernoulli(probs)
+        return torch.bernoulli(probs) * valid.float()
     if selection == "topk":
         if target_sparsity <= 0:
             return torch.zeros_like(probs)
-        k = max(1, int(round(probs.size(1) * min(1.0, target_sparsity))))
-        cutoff = probs.topk(k, dim=1).values[:, -1:].expand_as(probs)
-        return (probs >= cutoff).float()
-    return (probs > threshold).float()
+        selected = torch.zeros_like(probs)
+        scores = probs.masked_fill(~valid, float("-inf"))
+        valid_counts = valid.sum(dim=1)
+        for row, count in enumerate(valid_counts.tolist()):
+            if count <= 0:
+                continue
+            k = max(1, int(round(count * min(1.0, target_sparsity))))
+            k = min(k, int(count))
+            indices = scores[row].topk(k).indices
+            selected[row, indices] = 1.0
+        return selected
+    return (probs > threshold).float() * valid.float()
+
+
+def _deterministic_random_scores(reference: torch.Tensor) -> torch.Tensor:
+    batch, seq_len = reference.shape
+    positions = torch.arange(seq_len, device=reference.device, dtype=reference.dtype).unsqueeze(0)
+    rows = torch.arange(batch, device=reference.device, dtype=reference.dtype).unsqueeze(1)
+    values = torch.sin((positions + 1.0) * 12.9898 + (rows + 1.0) * 78.233) * 43758.5453
+    return values - values.floor()

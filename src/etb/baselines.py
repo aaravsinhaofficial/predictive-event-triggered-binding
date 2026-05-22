@@ -64,10 +64,12 @@ def _flatten_summary(
         "variant": variant,
         "checkpoint": str(checkpoint),
         "loss": train_metrics.get("loss"),
+        "lm_loss": train_metrics.get("lm_loss"),
         "gate_rate": train_metrics.get("gate_rate"),
         "gate_prob_mean": train_metrics.get("gate_prob_mean"),
         "information_gain_mean": train_metrics.get("information_gain_mean"),
         "activated_flops_per_token": train_metrics.get("activated_flops_per_token"),
+        "memory_residual_scale": train_metrics.get("memory_residual_scale"),
     }
     lm = eval_metrics.get("language_modeling", {})
     row["perplexity"] = lm.get("perplexity")

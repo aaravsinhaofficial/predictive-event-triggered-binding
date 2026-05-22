@@ -107,6 +107,9 @@ def train(config: ExperimentConfig) -> Path:
             row = {
                 "step": step,
                 "loss": float(output.loss.detach().cpu()),
+                "lm_loss": (
+                    float(output.lm_loss.detach().cpu()) if output.lm_loss is not None else 0.0
+                ),
                 "aux_loss": float(output.aux_loss.detach().cpu()) if output.aux_loss is not None else 0.0,
                 "compute_loss": (
                     float(output.compute_loss.detach().cpu()) if output.compute_loss is not None else 0.0
@@ -140,6 +143,9 @@ def train(config: ExperimentConfig) -> Path:
                     float(output.activated_flops.detach().cpu())
                     if output.activated_flops is not None
                     else 0.0
+                ),
+                "memory_residual_scale": float(
+                    getattr(model, "memory_residual_scale").detach().cpu()
                 ),
                 "elapsed_sec": time.time() - start_time,
                 "variant": model.config.variant,
