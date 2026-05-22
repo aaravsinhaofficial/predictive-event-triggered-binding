@@ -37,6 +37,8 @@ class ETBConfig(PretrainedConfig):
         gate_feature_prior_scale: float = 1.0,
         gate_target_mode: str = "topk",
         gate_positive_weight: float | None = None,
+        candidate_delta_weight: float = 0.35,
+        candidate_delta_clip: float = 1.5,
         prior_distill_lambda: float = 0.0,
         prior_distill_temperature: float = 1.0,
         memory_residual_scale_init: float = 0.1,
@@ -84,6 +86,8 @@ class ETBConfig(PretrainedConfig):
         self.gate_feature_prior_scale = gate_feature_prior_scale
         self.gate_target_mode = gate_target_mode
         self.gate_positive_weight = gate_positive_weight
+        self.candidate_delta_weight = candidate_delta_weight
+        self.candidate_delta_clip = candidate_delta_clip
         self.prior_distill_lambda = prior_distill_lambda
         self.prior_distill_temperature = prior_distill_temperature
         self.memory_residual_scale_init = memory_residual_scale_init

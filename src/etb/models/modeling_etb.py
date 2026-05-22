@@ -244,7 +244,7 @@ class ETBForCausalLM(PreTrainedModel):
         if self.config.variant == "etb" and labels is not None:
             cheap_lp, valid_next = self._shifted_token_log_probs(cheap_logits, labels)
             mode = str(self.config.gate_target_mode)
-            uses_candidate_target = mode not in {"prior_topk", "prior_soft"}
+            uses_candidate_target = mode in {"topk", "soft", "hybrid_topk", "hybrid_soft"}
             uses_candidate_loss = float(self.config.candidate_loss_lambda) > 0
             delta = torch.zeros_like(cheap_lp)
             if uses_candidate_target or uses_candidate_loss:
@@ -256,11 +256,18 @@ class ETBForCausalLM(PreTrainedModel):
                 candidate_lp, _ = self._shifted_token_log_probs(candidate_logits, labels)
                 delta = candidate_lp - cheap_lp
 
+            prior_score = self._prior_score(
+                cheap_stats[:, :-1, :],
+                boundaries[:, :-1, :],
+                valid_next,
+            )
             if mode in {"prior_topk", "prior_soft"}:
-                benefit_score = self._prior_score(
-                    cheap_stats[:, :-1, :],
-                    boundaries[:, :-1, :],
-                    valid_next,
+                benefit_score = prior_score
+            elif mode in {"hybrid_topk", "hybrid_soft"}:
+                candidate_score = self._candidate_delta_score(delta.detach(), valid_next)
+                benefit_score = (
+                    prior_score
+                    + float(self.config.candidate_delta_weight) * candidate_score
                 )
             else:
                 structural_prior = boundaries[:, :-1, :].amax(dim=-1) * float(
@@ -276,7 +283,7 @@ class ETBForCausalLM(PreTrainedModel):
                     - float(self.config.compute_penalty)
                 )
 
-            if mode in {"topk", "prior_topk"}:
+            if mode in {"topk", "prior_topk", "hybrid_topk"}:
                 target = self._topk_targets(
                     benefit_score,
                     valid_next,
@@ -300,7 +307,7 @@ class ETBForCausalLM(PreTrainedModel):
             benefit_raw = F.binary_cross_entropy_with_logits(
                 gate_logits[:, :-1],
                 target,
-                pos_weight=pos_weight if str(self.config.gate_target_mode) == "topk" else None,
+                pos_weight=pos_weight if mode.endswith("topk") else None,
                 reduction="none",
             )
             benefit_loss = float(self.config.benefit_lambda) * self._masked_mean(
@@ -413,6 +420,16 @@ class ETBForCausalLM(PreTrainedModel):
             + float(self.config.boundary_prior_weight) * boundary
         )
         return score.masked_fill(~mask.bool(), 0.0)
+
+    def _candidate_delta_score(
+        self,
+        delta: torch.Tensor,
+        valid: torch.Tensor,
+    ) -> torch.Tensor:
+        clip = float(self.config.candidate_delta_clip)
+        if clip > 0:
+            delta = delta.clamp(min=-clip, max=clip)
+        return self._standardize(delta, valid.float()).masked_fill(~valid, 0.0)
 
     def _prior_distill_target(
         self,

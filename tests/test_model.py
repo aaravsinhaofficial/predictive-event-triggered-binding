@@ -90,6 +90,23 @@ def test_prior_topk_gate_target_avoids_candidate_teacher(tmp_path):
     assert output.gate_targets.sum().item() > 0.0
 
 
+def test_hybrid_topk_gate_target_uses_bounded_candidate_teacher(tmp_path):
+    model, tokenizer = _tiny_model(
+        tmp_path,
+        gate_target_mode="hybrid_topk",
+        candidate_delta_weight=0.25,
+        candidate_delta_clip=0.5,
+        candidate_loss_lambda=0.0,
+    )
+    ids = tokenizer.encode("Who did the teacher solve the puzzle ?", add_special_tokens=False)
+    input_ids = torch.tensor([[tokenizer.bos_token_id, *ids, tokenizer.eos_token_id]])
+    output = model(input_ids=input_ids, labels=input_ids)
+    assert output.candidate_logits is not None
+    assert output.candidate_loss.item() == 0.0
+    assert output.gate_targets[0, -1].item() == 0.0
+    assert output.gate_targets.sum().item() > 0.0
+
+
 def test_random_matched_eval_uses_hard_matched_gates():
     logits = torch.zeros(2, 10)
     stats = torch.zeros(2, 10, 3)
