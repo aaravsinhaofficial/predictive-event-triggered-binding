@@ -7,6 +7,7 @@ outputs/
 data/babylm/
 data/eval/
 data/eval_audit/
+data/eval_publishable/
 data/sources/
 
 .DS_Store
