@@ -8,7 +8,7 @@ from etb.models.modeling_etb import ETBForCausalLM
 from etb.models.vsa import bind
 
 
-def _tiny_model(tmp_path, variant="etb"):
+def _tiny_model(tmp_path, variant="etb", **model_kwargs):
     tokenizer = load_or_train_tokenizer(
         tokenizer_dir=tmp_path / f"tok-{variant}",
         train_files=["data/fixtures/tiny_corpus.txt"],
@@ -29,6 +29,7 @@ def _tiny_model(tmp_path, variant="etb"):
         unk_token_id=tokenizer.unk_token_id,
         punctuation_token_ids=token_ids_for(tokenizer, PUNCTUATION_TOKENS),
         clause_token_ids=token_ids_for(tokenizer, CLAUSE_TOKENS),
+        **model_kwargs,
     )
     return ETBForCausalLM(config), tokenizer
 
@@ -72,6 +73,21 @@ def test_topk_gate_ignores_non_predictive_positions(tmp_path):
     input_ids = torch.tensor([[tokenizer.bos_token_id, *ids, tokenizer.eos_token_id]])
     output = model(input_ids=input_ids, labels=input_ids)
     assert output.gate_activations[0, -1].item() == 0.0
+
+
+def test_prior_topk_gate_target_avoids_candidate_teacher(tmp_path):
+    model, tokenizer = _tiny_model(
+        tmp_path,
+        gate_target_mode="prior_topk",
+        candidate_loss_lambda=0.0,
+    )
+    ids = tokenizer.encode("Who did the teacher solve the puzzle ?", add_special_tokens=False)
+    input_ids = torch.tensor([[tokenizer.bos_token_id, *ids, tokenizer.eos_token_id]])
+    output = model(input_ids=input_ids, labels=input_ids)
+    assert output.candidate_logits is None
+    assert output.candidate_loss.item() == 0.0
+    assert output.gate_targets[0, -1].item() == 0.0
+    assert output.gate_targets.sum().item() > 0.0
 
 
 def test_random_matched_eval_uses_hard_matched_gates():

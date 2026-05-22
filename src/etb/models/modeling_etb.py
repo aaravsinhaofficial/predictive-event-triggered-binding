@@ -242,27 +242,41 @@ class ETBForCausalLM(PreTrainedModel):
         prior_distill_loss = zero
 
         if self.config.variant == "etb" and labels is not None:
-            candidate_logits, _ = self._memory_augmented_logits(
-                hidden,
-                cheap_logits,
-                torch.ones_like(gate_probs),
-            )
             cheap_lp, valid_next = self._shifted_token_log_probs(cheap_logits, labels)
-            candidate_lp, _ = self._shifted_token_log_probs(candidate_logits, labels)
-            delta = candidate_lp - cheap_lp
-            structural_prior = boundaries[:, :-1, :].amax(dim=-1) * float(
-                self.config.structural_prior_bonus
-            )
-            interference_prior = cheap_stats[:, :-1, 2] * float(
-                self.config.interference_prior_bonus
-            )
-            benefit_score = (
-                delta.detach()
-                + structural_prior
-                + interference_prior
-                - float(self.config.compute_penalty)
-            )
-            if str(self.config.gate_target_mode) == "topk":
+            mode = str(self.config.gate_target_mode)
+            uses_candidate_target = mode not in {"prior_topk", "prior_soft"}
+            uses_candidate_loss = float(self.config.candidate_loss_lambda) > 0
+            delta = torch.zeros_like(cheap_lp)
+            if uses_candidate_target or uses_candidate_loss:
+                candidate_logits, _ = self._memory_augmented_logits(
+                    hidden,
+                    cheap_logits,
+                    torch.ones_like(gate_probs),
+                )
+                candidate_lp, _ = self._shifted_token_log_probs(candidate_logits, labels)
+                delta = candidate_lp - cheap_lp
+
+            if mode in {"prior_topk", "prior_soft"}:
+                benefit_score = self._prior_score(
+                    cheap_stats[:, :-1, :],
+                    boundaries[:, :-1, :],
+                    valid_next,
+                )
+            else:
+                structural_prior = boundaries[:, :-1, :].amax(dim=-1) * float(
+                    self.config.structural_prior_bonus
+                )
+                interference_prior = cheap_stats[:, :-1, 2] * float(
+                    self.config.interference_prior_bonus
+                )
+                benefit_score = (
+                    delta.detach()
+                    + structural_prior
+                    + interference_prior
+                    - float(self.config.compute_penalty)
+                )
+
+            if mode in {"topk", "prior_topk"}:
                 target = self._topk_targets(
                     benefit_score,
                     valid_next,
@@ -308,10 +322,11 @@ class ETBForCausalLM(PreTrainedModel):
                     prior_raw,
                     valid_next.float(),
                 )
-            candidate_loss = float(self.config.candidate_loss_lambda) * self._causal_lm_loss(
-                candidate_logits,
-                labels,
-            )
+            if candidate_logits is not None:
+                candidate_loss = float(self.config.candidate_loss_lambda) * self._causal_lm_loss(
+                    candidate_logits,
+                    labels,
+                )
             information_gain[:, :-1] = delta.masked_fill(~valid_next, 0.0)
             gate_targets[:, :-1] = target.masked_fill(~valid_next, 0.0)
 
@@ -378,27 +393,18 @@ class ETBForCausalLM(PreTrainedModel):
         boundaries: torch.Tensor,
         selection_mask: torch.Tensor,
     ) -> torch.Tensor:
-        entropy = self._standardize(cheap_stats[..., 0], selection_mask)
-        surprisal = self._standardize(cheap_stats[..., 1], selection_mask)
-        interference = self._standardize(cheap_stats[..., 2], selection_mask)
-        boundary = boundaries[..., :2].amax(dim=-1)
-        prior = (
-            float(self.config.entropy_prior_weight) * entropy
-            + float(self.config.surprisal_prior_weight) * surprisal
-            + float(self.config.interference_prior_weight) * interference
-            + float(self.config.boundary_prior_weight) * boundary
-        )
+        prior = self._prior_score(cheap_stats, boundaries, selection_mask)
         return float(self.config.gate_feature_prior_scale) * prior
 
-    def _prior_distill_target(
+    def _prior_score(
         self,
         cheap_stats: torch.Tensor,
         boundaries: torch.Tensor,
-        valid: torch.Tensor,
+        mask: torch.Tensor,
     ) -> torch.Tensor:
-        entropy = self._standardize(cheap_stats[..., 0], valid.float())
-        surprisal = self._standardize(cheap_stats[..., 1], valid.float())
-        interference = self._standardize(cheap_stats[..., 2], valid.float())
+        entropy = self._standardize(cheap_stats[..., 0], mask.float())
+        surprisal = self._standardize(cheap_stats[..., 1], mask.float())
+        interference = self._standardize(cheap_stats[..., 2], mask.float())
         boundary = boundaries[..., :2].amax(dim=-1)
         score = (
             float(self.config.entropy_prior_weight) * entropy
@@ -406,6 +412,15 @@ class ETBForCausalLM(PreTrainedModel):
             + float(self.config.interference_prior_weight) * interference
             + float(self.config.boundary_prior_weight) * boundary
         )
+        return score.masked_fill(~mask.bool(), 0.0)
+
+    def _prior_distill_target(
+        self,
+        cheap_stats: torch.Tensor,
+        boundaries: torch.Tensor,
+        valid: torch.Tensor,
+    ) -> torch.Tensor:
+        score = self._prior_score(cheap_stats, boundaries, valid)
         temp = max(1e-4, float(self.config.prior_distill_temperature))
         return torch.sigmoid(score / temp).masked_fill(~valid, 0.0)
 
