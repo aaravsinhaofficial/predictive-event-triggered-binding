@@ -6,7 +6,7 @@ mkdir -p outputs/logs outputs/generated_configs
 
 SEEDS="${SEEDS:-23 29 31}"
 MAIN_VARIANTS="${MAIN_VARIANTS:-etb,generic_dynamic,anira_emergent,punctuation_only,random_matched,cheap_only,dense_gru}"
-ABLATIONS="${ABLATIONS:-no_contrastive no_rt no_aux}"
+ABLATIONS="${ABLATIONS:-no_contrastive no_aux rt_supervised_upper_bound}"
 TASKS="${TASKS:-blimp,syntaxgym,fillergap,naturalstories}"
 
 make_config() {
@@ -36,6 +36,8 @@ if label == "no_contrastive":
     cfg["training"]["contrastive"]["enabled"] = False
 elif label == "no_rt":
     cfg["training"]["rt_gate"]["enabled"] = False
+elif label == "rt_supervised_upper_bound":
+    cfg["training"]["rt_gate"]["enabled"] = True
 elif label == "no_aux":
     cfg["training"]["contrastive"]["enabled"] = False
     cfg["training"]["rt_gate"]["enabled"] = False

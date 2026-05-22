@@ -47,6 +47,30 @@ def build_claim_report(summary_csv: str | Path, out_path: str | Path | None = No
                 _matched_flops(etb, base, tolerance=0.1, baseline=baseline),
             ]
         )
+        if "naturalstories_delta_r2_gate_flexible_surprisal" in summary.columns:
+            required_results.append(
+                _higher_is_better(
+                    etb,
+                    base,
+                    metric="naturalstories_delta_r2_gate_flexible_surprisal",
+                    label=(
+                        f"ETB beats {baseline} on RT residual variance beyond flexible "
+                        "matched-surprisal controls"
+                    ),
+                )
+            )
+        if "naturalstories_cv_by_story_delta_r2_gate_flexible_surprisal" in summary.columns:
+            required_results.append(
+                _higher_is_better(
+                    etb,
+                    base,
+                    metric="naturalstories_cv_by_story_delta_r2_gate_flexible_surprisal",
+                    label=(
+                        f"ETB beats {baseline} on held-out-story RT residual variance "
+                        "beyond flexible matched-surprisal controls"
+                    ),
+                )
+            )
 
     report["checks"] = required_results
     report["passes_main_track_claim"] = all(check["pass"] for check in required_results)
@@ -109,4 +133,3 @@ def _write_report(report: dict[str, Any], out_path: str | Path | None) -> dict[s
         with target.open("w", encoding="utf-8") as handle:
             json.dump(report, handle, indent=2)
     return report
-

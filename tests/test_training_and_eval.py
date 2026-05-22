@@ -61,5 +61,6 @@ def test_train_save_load_score_and_evaluate(tmp_path):
     metrics = evaluate(config, checkpoint=checkpoint, tasks="fixture")
     assert "language_modeling" in metrics
     assert "blimp" in metrics
+    assert "delta_r2_gate_flexible_surprisal" in metrics["naturalstories"]
+    assert "gate_r2_from_flexible_controls" in metrics["naturalstories"]
     assert Path(config.output_dir / "eval" / "metrics.json").exists()
-

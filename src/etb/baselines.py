@@ -81,7 +81,18 @@ def _flatten_summary(
             row[f"{task}_accuracy"] = eval_metrics[task].get("accuracy")
             row[f"{task}_n"] = eval_metrics[task].get("n")
     if "naturalstories" in eval_metrics:
-        row["naturalstories_delta_r2_gate"] = eval_metrics["naturalstories"].get("delta_r2_gate")
+        naturalstories = eval_metrics["naturalstories"]
+        row["naturalstories_delta_r2_gate"] = naturalstories.get("delta_r2_gate")
+        for key in (
+            "delta_r2_gate_matched_surprisal",
+            "delta_r2_gate_flexible_surprisal",
+            "cv_by_story_delta_r2_gate",
+            "cv_by_story_delta_r2_gate_flexible_surprisal",
+            "gate_r2_from_basic_controls",
+            "gate_r2_from_matched_controls",
+            "gate_r2_from_flexible_controls",
+        ):
+            row[f"naturalstories_{key}"] = naturalstories.get(key)
         row["naturalstories_n"] = eval_metrics["naturalstories"].get("n")
         row["naturalstories_baseline_controls"] = ",".join(
             eval_metrics["naturalstories"].get("baseline_controls", [])

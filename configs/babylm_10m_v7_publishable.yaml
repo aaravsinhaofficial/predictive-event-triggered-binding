@@ -65,7 +65,7 @@ training:
       blimp: data/eval_publishable/blimp/train_dev/data
       syntaxgym: data/eval_publishable/syntaxgym/train_dev
   rt_gate:
-    enabled: true
+    enabled: false
     weight: 0.12
     batch_size: 4
     every: 1

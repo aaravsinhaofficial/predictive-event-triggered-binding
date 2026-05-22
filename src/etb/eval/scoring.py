@@ -109,6 +109,14 @@ def sentence_log_likelihood(
             if output.gate_targets is not None
             else []
         )
+        cheap_token_log_probs = []
+        if output.cheap_logits is not None:
+            cheap_log_probs = output.cheap_logits[:, :-1, :].log_softmax(dim=-1)
+            cheap_token_log_probs = cheap_log_probs.gather(
+                -1,
+                targets.unsqueeze(-1),
+            ).squeeze(-1)
+            cheap_token_log_probs = [None, *cheap_token_log_probs[0].detach().cpu().tolist()]
         result["trace"] = {
             "tokens": tokens,
             "gate_probs": gate_probs,
@@ -117,6 +125,7 @@ def sentence_log_likelihood(
             "information_gain": information_gain,
             "memory_events": memory_events,
             "token_log_probs": [None, *token_log_probs[0].detach().cpu().tolist()],
+            "cheap_token_log_probs": cheap_token_log_probs,
         }
     return result
 
