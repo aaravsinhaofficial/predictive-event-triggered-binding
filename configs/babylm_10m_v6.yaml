@@ -1,0 +1,81 @@
+run_name: babylm_10m_v6
+seed: 23
+device: auto
+output_dir: outputs/babylm_10m_v6
+
+data:
+  hf_dataset_name: BabyLM-community/BabyLM-2026-Strict-Small
+  hf_split: train
+  text_column: text
+  prepared_text_path: data/babylm/strict_small_10000000.txt
+  download_if_missing: false
+  max_tokens: 10000000
+  tokenizer_dir: outputs/babylm_10m_v6/tokenizer
+  vocab_size: 16000
+  block_size: 256
+
+model:
+  variant: etb
+  d_model: 384
+  hidden_size: 384
+  num_layers: 2
+  dropout: 0.1
+  memory_slots: 12
+  memory_roles: 12
+  vsa_dim: 512
+  gate_threshold: 0.5
+  gate_selection: topk
+  target_sparsity: 0.15
+  sparsity_lambda: 0.001
+  budget_lambda: 0.02
+  benefit_lambda: 0.08
+  candidate_loss_lambda: 0.005
+  candidate_delta_weight: 0.25
+  candidate_delta_clip: 1.0
+  benefit_temperature: 0.25
+  compute_penalty: 0.0
+  structural_prior_bonus: 0.2
+  interference_prior_bonus: 0.1
+  entropy_prior_weight: 0.45
+  surprisal_prior_weight: 0.2
+  boundary_prior_weight: 1.6
+  interference_prior_weight: 0.9
+  gate_feature_prior_scale: 0.85
+  gate_target_mode: hybrid_topk
+  memory_residual_scale_init: 0.05
+  memory_dropout: 0.0
+
+training:
+  batch_size: 32
+  max_steps: 12000
+  learning_rate: 0.0006
+  weight_decay: 0.01
+  grad_clip: 1.0
+  log_every: 50
+  save_every: 1000
+  contrastive:
+    enabled: true
+    weight: 0.08
+    margin: 0.5
+    batch_size: 16
+    every: 1
+    max_pairs: 20000
+    sources:
+      fillergap: data/eval/fillergap/fillergap.csv
+      blimp: data/eval/blimp/data
+      syntaxgym: data/eval/syntaxgym
+  rt_gate:
+    enabled: true
+    weight: 0.04
+    batch_size: 4
+    every: 1
+    target_temperature: 0.8
+    path: data/eval/naturalstories/naturalstories.tsv
+
+evaluation:
+  batch_size: 16
+  tasks:
+    blimp: data/eval/blimp/data
+    syntaxgym: data/eval/syntaxgym
+    fillergap: data/eval/fillergap/fillergap.csv
+    naturalstories: data/eval/naturalstories/naturalstories.tsv

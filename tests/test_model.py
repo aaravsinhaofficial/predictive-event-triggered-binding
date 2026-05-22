@@ -5,6 +5,7 @@ from etb.eval.scoring import sentence_log_likelihood, sentence_log_likelihood_ba
 from etb.models.configuration_etb import ETBConfig
 from etb.models.gates import cheap_predictive_stats, cue_interference, route_gate
 from etb.models.modeling_etb import ETBForCausalLM
+from etb.training import _load_contrastive_pairs, _load_reading_time_examples
 from etb.models.vsa import bind
 
 
@@ -147,6 +148,28 @@ def test_batch_sentence_scoring_matches_scalar(tmp_path):
         )
     ]
     assert torch.allclose(torch.tensor(scalar), torch.tensor(batched), atol=1e-5)
+
+
+def test_contrastive_and_reading_time_aux_loaders(tmp_path):
+    _, tokenizer = _tiny_model(tmp_path)
+    pairs = _load_contrastive_pairs(
+        {
+            "fillergap": "data/fixtures/fillergap/tiny.csv",
+            "blimp": "data/fixtures/blimp/tiny.jsonl",
+            "syntaxgym": "data/fixtures/syntaxgym/tiny_suite.json",
+        },
+        max_pairs=8,
+        seed=1,
+    )
+    assert pairs
+    assert all(len(pair) == 2 for pair in pairs)
+    examples = _load_reading_time_examples(
+        path="data/fixtures/naturalstories/tiny.tsv",
+        tokenizer=tokenizer,
+        target_temperature=1.0,
+    )
+    assert examples
+    assert examples[0]["input_ids"].numel() == examples[0]["gate_targets"].numel()
 
 
 def test_cheap_surprisal_feature_is_causal():

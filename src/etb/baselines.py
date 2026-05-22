@@ -70,6 +70,8 @@ def _flatten_summary(
         "information_gain_mean": train_metrics.get("information_gain_mean"),
         "activated_flops_per_token": train_metrics.get("activated_flops_per_token"),
         "memory_residual_scale": train_metrics.get("memory_residual_scale"),
+        "contrastive_loss": train_metrics.get("contrastive_loss"),
+        "rt_gate_loss": train_metrics.get("rt_gate_loss"),
     }
     lm = eval_metrics.get("language_modeling", {})
     row["perplexity"] = lm.get("perplexity")
