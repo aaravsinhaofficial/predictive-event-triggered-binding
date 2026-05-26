@@ -117,3 +117,18 @@ Analysis commands generate:
 - compute-accuracy Pareto plots
 - Natural Stories token gate traces
 - gate-rate breakdowns by token/event class
+
+## V7 Insights Results
+
+The final leakage-controlled V7 analysis package is checked in under
+`outputs/insights/v7_publishable/`.
+
+Start with:
+
+- `outputs/insights/v7_publishable/README.md` for the interpretation
+- `outputs/insights/v7_publishable/report.md` for the generated report
+- `outputs/insights/v7_publishable/*.csv` for final tables
+- `outputs/insights/v7_publishable/figures/` for PNG/PDF figures
+
+The result supports an Insights-style failure-analysis framing rather than a
+clean positive ETB-superiority claim.
